@@ -1,0 +1,60 @@
+name: GUID scan (shared)
+
+on:
+  workflow_call:
+    secrets:
+      AccessToken:
+        required: true
+
+jobs:
+  scan-guids:
+    if: github.repository_owner == 'MicrosoftDocs'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.AccessToken }}
+
+      - name: Check for duplicate GUIDs
+        run: |
+          echo "Scanning all markdown files for duplicate awa-articleGuid values..."
+
+          # Build a map of GUID -> file
+          GUID_MAP=""
+          for file in $(find . -name '*.md' -not -path '*/includes/*'); do
+            GUID=$(awk '
+              /^---$/ { count++; next }
+              count == 1 && /^awa-articleGuid:/ {
+                sub(/^awa-articleGuid:[[:space:]]*/, "")
+                gsub(/[[:space:]]/, "")
+                if (length > 0) print
+                exit
+              }
+              count >= 2 { exit }
+            ' "$file")
+
+            if [ -n "$GUID" ]; then
+              GUID_MAP="${GUID_MAP}${GUID} ${file}"$'\n'
+            fi
+          done
+
+          # Find duplicate GUIDs
+          DUPES=$(echo "$GUID_MAP" | awk 'NF {print $1}' | sort | uniq -d)
+
+          if [ -z "$DUPES" ]; then
+            echo "All awa-articleGuid values are unique."
+            exit 0
+          fi
+
+          echo "::error::Duplicate awa-articleGuid values found!"
+          echo ""
+          while IFS= read -r dup_guid; do
+            [ -z "$dup_guid" ] && continue
+            echo "DUPLICATE GUID: $dup_guid"
+            echo "  Found in:"
+            echo "$GUID_MAP" | grep "^$dup_guid " | awk '{print "    - " $2}'
+            echo ""
+          done <<< "$DUPES"
+
+          exit 1
